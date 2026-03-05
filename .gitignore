@@ -1,0 +1,6 @@
+.env
+dump/
+*.pbf*
+*.zip*
+**/unzip
+*.sql.gz

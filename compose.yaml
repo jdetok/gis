@@ -1,0 +1,183 @@
+services:
+    postgis: 
+        container_name: postgis
+        image: postgis
+        build:
+            context: .
+            dockerfile: ./Dockerfile
+        env_file:
+            - .env
+        ports: 
+            - "4322:5432"
+        volumes: 
+            - postgis_data:/var/lib/postgresql
+            - ./init:/docker-entrypoint-initdb.d:ro
+        command: ["postgres",
+            "-c", "max_wal_size=8GB",
+            "-c", "min_wal_size=512MB",
+            "-c", "wal_compression=on",
+            "-c", "checkpoint_timeout=5min",
+            "-c", "checkpoint_completion_target=0.6"
+            ]
+    osm2pgsql:
+        depends_on:
+            postgis:
+                condition: service_healthy
+        image: osm2pgsql
+        build:
+            context: .
+            dockerfile: ./osm2pgsql.Dockerfile
+        env_file:
+            - .env
+        environment:
+            - PGPASSWORD=${POSTGRES_PASSWORD}
+        entrypoint:
+            - bash
+            - -lc
+        command:
+            - |
+                set -euo pipefail
+
+                URL="https://download.geofabrik.de/north-america/us-midwest-latest.osm.pbf"
+
+                echo "POSTGRES_USER=$${POSTGRES_USER}"
+                echo "POSTGRES_DB=$${POSTGRES_DB}"
+                echo "PGPASSWORD set: $${PGPASSWORD:+yes}"
+
+                tmp=/tmp/in.osm.pbf
+                curl -L --fail --retry 10 --retry-delay 2 --retry-all-errors "$$URL" -o "$$tmp"
+
+                osm2pgsql -v \
+                    -r pbf \
+                    -H postgis \
+                    -P 5432 \
+                    -U "$${POSTGRES_USER}" \
+                    -d "$${POSTGRES_DB}" \
+                    --create \
+                    --slim \
+                    --hstore \
+                    --cache 4096 \
+                    "$$tmp"
+        volumes:
+            - ./osm:/data:ro
+    acs2024_restore:
+        image: postgres:18
+        depends_on:
+            postgis:
+                condition: service_healthy
+        env_file:
+            - .env
+        environment:
+            - PGHOST=postgis
+            - PGPORT=5432
+            - PGUSER=${POSTGRES_USER}
+            - PGPASSWORD=${POSTGRES_PASSWORD}
+            - PGDATABASE=${POSTGRES_DB}
+        volumes:
+            - ./acs24_5:/census_upload
+        command:
+            - bash 
+            - -lc
+            - |
+                set -euo pipefail;
+                cd /census_upload;
+                DUMP="acs2024_5yr_backup.sql.gz"
+                URL="https://backup.censusreporter.org/census-reporter-extracts/acs2024_5yr_backup.sql.gz"
+                if [ ! -f "$$DUMP" ]; then
+                    apt-get update && apt-get install -y --no-install-recommends curl ca-certificates gzip;
+                    echo "Downloading: $$URL"
+                    curl -L --fail --retry 10 --retry-delay 2 -o "$$DUMP" "$$URL"
+                fi;
+                echo -E "drop schema if exists acs2024_5yr;" | psql;
+                gunzip -c "$$DUMP" | sed -E "s/\bpostgres\b/${POSTGRES_USER}/g" | psql -v ON_ERROR_STOP=1;
+
+    tiger_load_2024:
+        image: ghcr.io/osgeo/gdal:alpine-small-latest
+        depends_on:
+            postgis:
+                condition: service_healthy
+        env_file:
+            - .env
+        environment:
+            - PGHOST=postgis
+            - PGPORT=5432
+            - PGUSER=${POSTGRES_USER}
+            - PGPASSWORD=${POSTGRES_PASSWORD}
+            - PGDATABASE=${POSTGRES_DB}
+        volumes:
+            - ./tiger24:/tiger
+        command:
+            - sh
+            - -lc
+            - |
+                set -euo pipefail
+
+                apk add --no-cache curl unzip postgresql-client
+
+                mkdir -p /tiger/zips /tiger/unzip
+                cd /tiger/zips
+
+                # Use explicit output names so we KNOW we have *.zip
+                curl -L --fail --retry 10 --retry-delay 2 -o tl_2024_us_state.zip  "https://www2.census.gov/geo/tiger/TIGER2024/STATE/tl_2024_us_state.zip"
+                curl -L --fail --retry 10 --retry-delay 2 -o tl_2024_us_county.zip "https://www2.census.gov/geo/tiger/TIGER2024/COUNTY/tl_2024_us_county.zip"
+                curl -L --fail --retry 10 --retry-delay 2 -o tl_2024_29_tract.zip  "https://www2.census.gov/geo/tiger/TIGER2024/TRACT/tl_2024_29_tract.zip"
+                curl -L --fail --retry 10 --retry-delay 2 -o tl_2024_17_tract.zip  "https://www2.census.gov/geo/tiger/TIGER2024/TRACT/tl_2024_17_tract.zip"
+
+                echo "Files in /tiger/zips:"
+                ls -lah
+
+                rm -rf /tiger/unzip/*
+                # Guard: abort if no zips exist
+                if ! ls -1 *.zip >/dev/null 2>&1; then
+                    echo "ERROR: no .zip files found in /tiger/zips"
+                    exit 1
+                fi
+
+                for z in *.zip; do
+                    echo "Unzipping $$z"
+                    unzip -q -o "$$z" -d /tiger/unzip
+                done
+
+                echo "Shapefiles:"
+                ls -lah /tiger/unzip/*.shp
+
+                echo "Creating db schema tgr24:"
+                psql -h $$PGHOST -U $$PGUSER -d $$PGDATABASE \
+                    -c "create schema if not exists tgr24;"
+
+                PG="PG:host=$$PGHOST port=$$PGPORT dbname=$$PGDATABASE user=$$PGUSER password=$$PGPASSWORD"
+
+                ogr2ogr -f PostgreSQL "$$PG" /tiger/unzip/tl_2024_us_state.shp  -nln tgr24.state  -nlt PROMOTE_TO_MULTI -lco GEOMETRY_NAME=geom -lco FID=gid -overwrite
+                ogr2ogr -f PostgreSQL "$$PG" /tiger/unzip/tl_2024_us_county.shp -nln tgr24.county -nlt PROMOTE_TO_MULTI -lco GEOMETRY_NAME=geom -lco FID=gid -overwrite
+                ogr2ogr -f PostgreSQL "$$PG" /tiger/unzip/tl_2024_29_tract.shp  -nln tgr24.tract  -nlt PROMOTE_TO_MULTI -lco GEOMETRY_NAME=geom -lco FID=gid -overwrite
+                ogr2ogr -f PostgreSQL "$$PG" /tiger/unzip/tl_2024_17_tract.shp  -nln tgr24.tract  -nlt PROMOTE_TO_MULTI -lco GEOMETRY_NAME=geom -lco FID=gid -append
+    pg_backup:
+        image: postgres:18
+        depends_on:
+            postgis:
+                condition: service_healthy
+        env_file:
+            - .env
+        environment:
+            - PGHOST=postgis
+            - PGPORT=5432
+            - PGUSER=${POSTGRES_USER}
+            - PGPASSWORD=${POSTGRES_PASSWORD}
+            - PGDATABASE=${POSTGRES_DB}
+        volumes:
+            - ./dump:/dump
+        command:
+            - bash
+            - -lc
+            - |
+                set -euo pipefail
+
+                mkdir -p /dump
+                TS="$(date -u +%Y%m%d_%H%M%S)"
+                OUT="/dump/$${PGDATABASE}_$${TS}.sql.gz"
+
+                echo "Writing $$OUT"
+                pg_dump -Fc --no-owner --no-privileges -d "$$PGDATABASE" | gzip -9 > "$$OUT"
+                ls -lh "$$OUT"
+volumes:
+    postgis_data:

@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+
+# def
+DIR="dump"
+TS="$(date -u +%Y%m%d_%H%M%S)"
+OUT="/$DIR/${PGDATABASE}_${TS}.sql.gz"
+
+# cmd
+set -eeuo pipefail
+
+echo "starting backup, writing to $OUT..."
+
+mkdir -p /$DIR
+
+pg_dump -Fc --no-owner --no-privileges -d "$PGDATABASE" | gzip -9 > "$OUT"
+
+echo "pg_dump complete running 'ls -lh $OUT'"
+ls -lh 

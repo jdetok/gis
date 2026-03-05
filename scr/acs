@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+
+# def
+SCHEMA="acs2024_5yr"
+DIR="census_upload"
+DUMP="acs2024_5yr_backup.sql.gz"
+URL="https://backup.censusreporter.org/census-reporter-extracts/acs2024_5yr_backup.sql.gz"
+
+# cmd
+set -euo pipefail
+
+mkdir -p /$DIR && cd /$DIR
+
+if [ ! -f "$DUMP" ]; then
+    apt-get update && apt-get install -y --no-install-recommends curl ca-certificates gzip
+    echo "Downloading: $URL"
+    curl -L --fail --retry 10 --retry-delay 2 -o "$DUMP" "$URL"
+fi;
+
+echo -E "drop schema if exists $SCHEMA;" | psql
+
+gunzip -c "$DUMP" | sed -E "s/\bpostgres\b/${POSTGRES_USER}/g" | psql -v ON_ERROR_STOP=1;
