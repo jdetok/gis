@@ -12,76 +12,47 @@ services:
         volumes: 
             - postgis_data:/var/lib/postgresql
             - ./init:/docker-entrypoint-initdb.d:ro
-        command: ["postgres",
-            "-c", "max_wal_size=8GB",
-            "-c", "min_wal_size=512MB",
-            "-c", "wal_compression=on",
-            "-c", "checkpoint_timeout=5min",
-            "-c", "checkpoint_completion_target=0.6"
-            ]
-    osm2pgsql:
+            - ./postgresql.conf:/etc/postgresql/postgresql.conf:ro
+        command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf" ]
+    osm:
+        container_name: fetch-osm
         depends_on:
             postgis:
                 condition: service_healthy
-        image: osm2pgsql
+        image: fetch-osm
         build:
             context: .
-            dockerfile: ./osm2pgsql.Dockerfile
+            dockerfile: ./osm.Dockerfile
         env_file:
             - .env
-        environment:
-            - PGPASSWORD=${POSTGRES_PASSWORD}
-        entrypoint:
-            - bash
-            - -lc
-        command:
-            - "./scr/osm"
         volumes:
             - ./osm:/data:ro
-            - ./scr:/scr:ro
-    acs2024_restore:
-        image: postgres:18
+            - ./scr/osm:/scr/osm:ro
+        entrypoint: [ "/scr/osm" ]
+    acs:
+        container_name: fetch-acs
         depends_on:
             postgis:
                 condition: service_healthy
+        image: postgres:18
         env_file:
             - .env
-        environment:
-            - PGHOST=postgis
-            - PGPORT=5432
-            - PGUSER=${POSTGRES_USER}
-            - PGPASSWORD=${POSTGRES_PASSWORD}
-            - PGDATABASE=${POSTGRES_DB}
         volumes:
             - ./acs24_5:/census_upload
             - ./scr/acs:/scr/acs:ro
-        command:
-            - bash 
-            - -lc
-            - |
-                /scr/acs
-
-    tiger:
+        entrypoint: [ "/scr/acs"]
+    tgr:
+        container_name: fetch-tiger
         image: ghcr.io/osgeo/gdal:alpine-small-latest
         depends_on:
             postgis:
                 condition: service_healthy
         env_file:
             - .env
-        environment:
-            - PGHOST=postgis
-            - PGPORT=5432
-            - PGUSER=${POSTGRES_USER}
-            - PGPASSWORD=${POSTGRES_PASSWORD}
-            - PGDATABASE=${POSTGRES_DB}
         volumes:
             - ./tiger24:/tiger
             - ./scr/tgr:/scr/tgr:ro
-        command:
-            - sh
-            - -lc
-            - |
-                /scr/tgr
+        entrypoint: [ "/scr/tgr" ]
     pg_backup:
         image: postgres:18
         depends_on:
@@ -89,18 +60,9 @@ services:
                 condition: service_healthy
         env_file:
             - .env
-        environment:
-            - PGHOST=postgis
-            - PGPORT=5432
-            - PGUSER=${POSTGRES_USER}
-            - PGPASSWORD=${POSTGRES_PASSWORD}
-            - PGDATABASE=${POSTGRES_DB}
         volumes:
             - ./dump:/dump
-        command:
-            - bash
-            - -lc
-            - |
-                /scr/bkp:/scr/bkp:ro
+            - ./scr/bkp:/scr/bkp:ro
+        entrypoint: [ "/scr/bkp"]
 volumes:
     postgis_data:

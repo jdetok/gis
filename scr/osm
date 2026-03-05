@@ -1,18 +1,25 @@
 #!/usr/bin/env bash
 
 # def
-REGION="us-northeast"
+REGION="us-pacific"
 URL="https://download.geofabrik.de/north-america/$REGION-latest.osm.pbf"
-PGHOST=postgis
-PGPORT=5432
 MODE=append
 tmp=/tmp/in.osm.pbf
+
+export PGPASSWORD="${POSTGRES_PASSWORD}"
 
 # cmd
 set -euo pipefail
 
+psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -d "${POSTGRES_DB}" \
+    -U "${POSTGRES_USER}" \
+    -c "select 1"
+
 curl -L --fail --retry 10 --retry-delay 2 --retry-all-errors "$URL" -o "$tmp"
 
-osm2pgsql -v -r pbf -H "$PGHOST" -P "$PGPORT" -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
-    --"$MODE" --slim --hstore --cache 4096 \
+osm2pgsql -v -r pbf \
+    -H "${POSTGRES_HOST}" -P "${POSTGRES_PORT}" -d "${POSTGRES_DB}" \
+    -U "${POSTGRES_USER}" \
+    --"$MODE" \
+    --slim --hstore --cache 4096 \
     "$tmp"
