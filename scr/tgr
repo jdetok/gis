@@ -2,24 +2,75 @@
 
 # def
 SCHEMA="tgr24"
-DIR="census_upload"
-DUMP="acs2024_5yr_backup.sql.gz"
+DIR="tiger"
 URL="https://backup.censusreporter.org/census-reporter-extracts/acs2024_5yr_backup.sql.gz"
 
 declare -A TGR_FILES
-TGR_FILES["tl_2024_us_state.zip"]="STATE"
-TGR_FILES["tl_2024_us_county.zip"]="COUNTY"
-TGR_FILES["tl_2024_29_tract.zip"]="TRACT"
-TGR_FILES["tl_2024_17_tract.zip"]="TRACT"
+# TGR_FILES["tl_2024_us_state"]="STATE"
+# TGR_FILES["tl_2024_us_county"]="COUNTY"
+# TGR_FILES["tl_2024_29_tract"]="TRACT"
+# TGR_FILES["tl_2024_17_tract"]="TRACT"
+# TGR_FILES["tl_2024_18_tract"]="TRACT" # indiana
+# TGR_FILES["tl_2024_19_tract"]="TRACT" # iowa
+# TGR_FILES["tl_2024_27_tract"]="TRACT" # minnesota
+TGR_FILES["tl_2024_55_tract"]="TRACT" # wisconsin
+TGR_FILES["tl_2024_31_tract"]="TRACT" # nebraska
+TGR_FILES["tl_2024_39_tract"]="TRACT" # ohio
+TGR_FILES["tl_2024_20_tract"]="TRACT" # kansas
+TGR_FILES["tl_2024_26_tract"]="TRACT" # michigan
+TGR_FILES["tl_2024_42_tract"]="TRACT" # penn
+TGR_FILES["tl_2024_34_tract"]="TRACT" # nj
+TGR_FILES["tl_2024_36_tract"]="TRACT" # ny
+TGR_FILES["tl_2024_24_tract"]="TRACT" # maryland
+TGR_FILES["tl_2024_11_tract"]="TRACT" # dc
+TGR_FILES["tl_2024_25_tract"]="TRACT" # mass
+TGR_FILES["tl_2024_23_tract"]="TRACT" # maine
+TGR_FILES["tl_2024_33_tract"]="TRACT" # nh
+TGR_FILES["tl_2024_54_tract"]="TRACT" # wv
+TGR_FILES["tl_2024_10_tract"]="TRACT" # del
+TGR_FILES["tl_2024_50_tract"]="TRACT" # dm
+TGR_FILES["tl_2024_44_tract"]="TRACT" # ri
+
+
 
 # cmd
 set -euo pipefail
 
 apk add --no-cache curl unzip postgresql-client
 
+mkdir -p /$DIR/zips /$DIR/unzip
+cd /$DIR/zips
 
+for key in "${!TGR_FILES[@]}"; do
+    curl -L --fail --retry 10 --retry-delay 2 -o $key.zip \
+        "https://www2.census.gov/geo/tiger/TIGER2024/${TGR_FILES[$key]}/$key.zip"
+done
 
-for key in "${!TGR_SHPFILES[@]}"; do
-    curl -L --fail --retry 10 --retry-delay 2 -o $key \
-        "https://www2.census.gov/geo/tiger/TIGER2024/${TGR_SHPFILES[$key]}/$key"
+echo "Files in /tiger/zips:"
+ls -lah
+
+rm -rf /$DIR/unzip/*
+
+ if ! ls -1 *.zip >/dev/null 2>&1; then
+    echo "ERROR: no .zip files found in /$DIR/zips"
+    exit 1
+fi
+
+for z in *.zip; do
+    echo "Unzipping $z"
+    unzip -q -o "$z" -d /$DIR/unzip
+done
+
+echo "Shapefiles:"
+ls -lah /$DIR/unzip/*.shp
+
+echo "Creating db schema $SCHEMA:"
+psql -h $PGHOST -U $PGUSER -d $PGDATABASE \
+    -c "create schema if not exists $SCHEMA;"
+
+PG="PG:host=$PGHOST port=$PGPORT dbname=$PGDATABASE user=$PGUSER password=$PGPASSWORD"
+for key in "${!TGR_FILES[@]}"; do
+    ogr2ogr -f PostgreSQL "$PG" /$DIR/unzip/$key.shp  \
+        -nln $SCHEMA.${TGR_FILES[$key],,}  -nlt PROMOTE_TO_MULTI \
+        -lco GEOMETRY_NAME=geom -lco FID=gid -append
 done
