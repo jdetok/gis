@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+
+# env
+export PGHOST="${POSTGRES_HOST}"
+export PGPORT="${POSTGRES_PORT}"
+export PGUSER="${POSTGRES_USER}"
+export PGPASSWORD="${POSTGRES_PASSWORD}"
+export PGDATABASE="${POSTGRES_DB}"
+
+set -eou pipefail
+
+source_schema="${1:-acs2024_5yr}"
+target_schema="${2:-acs_out}"
+dir="/dump"
+dumpf="$dir/${target_schema}.dump"
+
+mkdir -p $dir
+
+echo "calling procedure to create schema $target_schema from schema $source_schema..."
+psql -v ONERROR_STOP=1 --echo-all -c "call copy_acs_tables('${source_schema}', '${target_schema}');"
+
+echo "creating dump file $dumpf from schema $target_schema..."
+pg_dump --schema="${target_schema}" --format=custom --file="${dumpf}"
+
+echo "dump file ($(stat -c%s $dumpf) bytes) created at $dumpf, complete"

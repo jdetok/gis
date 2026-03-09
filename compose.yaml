@@ -11,6 +11,8 @@ services:
             - "4322:5432"
         volumes: 
             - postgis_data:/var/lib/postgresql
+            - ./scr:/scr:ro
+            - ./dump:/dump
             - ./init:/docker-entrypoint-initdb.d:ro
             - ./postgresql.conf:/etc/postgresql/postgresql.conf:ro
         command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf" ]
